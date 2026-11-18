@@ -33,7 +33,7 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # ============== إعدادات المسؤول ==============
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@MKARYhost.com")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@mkaryhost.com")
 ADMIN_PASSWORD_RAW = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 # ============== إشعارات تليجرام ==============
