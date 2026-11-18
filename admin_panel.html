@@ -150,7 +150,7 @@ body{font-family:'Tajawal','Inter',sans-serif;background:var(--bg);color:var(--t
 <!-- SIDEBAR -->
 <aside class="sidebar">
   <div class="sb-top">
-    <div class="sb-brand"><div class="sb-mark">Z</div><span class="sb-title">MKARY HOST</span></div>
+    <div class="sb-brand"><div class="sb-mark">M</div><span class="sb-title">MKARY HOST</span></div>
     <div class="admin-chip"><i class="fas fa-shield-halved"></i> لوحة المسؤول</div>
   </div>
   <nav class="sb-nav">
@@ -181,6 +181,13 @@ body{font-family:'Tajawal','Inter',sans-serif;background:var(--bg);color:var(--t
   <div class="page">
     <!-- DASHBOARD -->
     <div class="tab-pane active" id="tab-dashboard">
+      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:800;margin-bottom:5px"><i class="fas fa-users" style="color:var(--accent2)"></i> إدارة حسابات الاستضافة</div>
+          <div style="font-size:.8rem;color:var(--text3)">عرض جميع الحسابات وتنزيل ملفات أي حساب كاملة بصيغة ZIP</div>
+        </div>
+        <button class="btn-primary" type="button" onclick="showTab('users');openAccountsPanel()"><i class="fas fa-folder-open"></i> عرض الحسابات الموجودة عليها</button>
+      </div>
       <div class="stats-row">
         <div class="stat-card"><div class="sc-top"><div class="sc-lbl">المستخدمون</div><div class="sc-icon si-b"><i class="fas fa-users"></i></div></div><div class="sc-val" id="totalUsers">—</div><div class="sc-change"><i class="fas fa-arrow-trend-up"></i> إجمالي المسجلين</div></div>
         <div class="stat-card"><div class="sc-top"><div class="sc-lbl">الخوادم الكلية</div><div class="sc-icon si-c"><i class="fas fa-server"></i></div></div><div class="sc-val" id="totalServers">—</div><div class="sc-change"><i class="fas fa-circle-check"></i> في النظام</div></div>
@@ -406,11 +413,18 @@ async function loadDashboard(){
   }catch(e){ console.error(e); }
 }
 
-async function toggleAccounts(){
+async async function toggleAccounts(){
   const panel=document.getElementById('accountsPanel');
-  const opening=panel.style.display==='none';
+  const opening=panel.style.display==='none' || panel.style.display==='';
   panel.style.display=opening?'block':'none';
   if(opening) await loadAccounts();
+}
+
+async function openAccountsPanel(){
+  const panel=document.getElementById('accountsPanel');
+  if(!panel) return;
+  panel.style.display='block';
+  await loadAccounts();
 }
 
 async function loadAccounts(){
