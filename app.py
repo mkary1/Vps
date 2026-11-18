@@ -384,10 +384,9 @@ threading.Thread(target=process_monitor, daemon=True).start()
 # ============== الصفحات ==============
 @app.route('/')
 def home():
-    if 'email' in session:
-        if is_admin(session['email']):
-            return redirect('/admin')
-        return redirect('/dashboard')
+    # Keep the public domain root on the public landing page.
+    # Authenticated users enter their panel only after an explicit login redirect
+    # or by opening /admin or /dashboard.
     return redirect('/welcome')
 
 @app.route('/welcome')
@@ -396,8 +395,8 @@ def welcome_page():
 
 @app.route('/login')
 def login_page():
-    if 'email' in session:
-        return redirect('/')
+    # Always show the login screen. This also gives users a reliable way
+    # to reach the login page if an old session cookie remains in the browser.
     return send_from_directory(BASE_DIR, 'login.html')
 
 @app.route('/dashboard')
@@ -485,9 +484,19 @@ def api_login():
 
 @app.route('/api/logout', methods=['GET', 'POST'])
 def api_logout():
+    # Clear the Flask session and explicitly expire its configured cookie.
     session.clear()
-    response = make_response(jsonify({"success": True}))
-    response.set_cookie('session', '', expires=0)
+    response = make_response(jsonify({"success": True, "message": "تم تسجيل الخروج"}))
+    cookie_name = app.config.get('SESSION_COOKIE_NAME', 'session')
+    response.delete_cookie(
+        cookie_name,
+        path=app.config.get('SESSION_COOKIE_PATH') or '/',
+        domain=app.config.get('SESSION_COOKIE_DOMAIN'),
+        secure=app.config.get('SESSION_COOKIE_SECURE', request.is_secure),
+        httponly=app.config.get('SESSION_COOKIE_HTTPONLY', True),
+        samesite=app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response
 
 @app.route('/api/current_user')

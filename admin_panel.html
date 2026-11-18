@@ -645,7 +645,7 @@ function toast(msg,type='info'){
 
 function esc(s){ return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function planL(p){ return p==='basic'?'أساسية':p==='premium'?'احترافية':p==='ultimate'?'أسطورية':p==='admin'?'مسؤول':p||'أساسية'; }
-async function logout(){ await fetch('/api/logout',{method:'POST'}); location.href='/login'; }
+async function logout(){ try{ await fetch('/api/logout',{method:'POST',credentials:'same-origin',cache:'no-store'}); }catch(e){} finally{ location.replace('/welcome?logged_out=1'); } }
 
 setInterval(async()=>{ try{ const r=await fetch('/api/system/metrics'); const d=await r.json(); document.getElementById('sysCPU').textContent=(d.cpu||0)+'%'; document.getElementById('sysRAM').textContent=(d.memory||0)+'%'; document.getElementById('sysDisk').textContent=(d.disk||0)+'%'; }catch(e){} },10000);
 
