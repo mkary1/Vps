@@ -1,4 +1,4 @@
-# app.py - ZIAD HOST v6 | نظام استضافة احترافي
+# app.py - MKARY HOST v6 | نظام استضافة احترافي
 # تصميم جديد كامل - 2026
 
 import os
@@ -15,9 +15,10 @@ import threading
 import requests
 import shutil
 import zipfile
+import tempfile
 import signal
 from datetime import datetime, timedelta
-from flask import Flask, send_from_directory, request, jsonify, session, redirect, make_response
+from flask import Flask, send_from_directory, send_file, request, jsonify, session, redirect, make_response
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # استخدام مسار /tmp للبيانات في Railway إذا كانت الصلاحيات مقيدة في المجلد الرئيسي
@@ -25,14 +26,14 @@ USERS_DIR = os.environ.get("USERS_DIR", os.path.join(BASE_DIR, "USERS"))
 os.makedirs(USERS_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder=BASE_DIR)
-app.secret_key = os.environ.get("SECRET_KEY", "ZIAD_HOST_V6_2026_ULTRA_SECRET")
+app.secret_key = os.environ.get("SECRET_KEY", "MKARY_HOST_V6_2026_ULTRA_SECRET")
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # ============== إعدادات المسؤول ==============
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@ziadhost.com")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@MKARYhost.com")
 ADMIN_PASSWORD_RAW = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 # ============== إشعارات تليجرام ==============
@@ -284,30 +285,83 @@ def start_server_process(folder):
         return False, str(e)
 
 def stop_server_process(folder):
+    """Stop the server process group and mark it stopped before signalling it,
+    so the monitor cannot mistake an intentional stop for a crashed process."""
     srv = db["servers"].get(folder)
     if not srv:
         return
-    if srv.get("pid"):
-        try:
-            p = psutil.Process(srv["pid"])
-            if hasattr(os, 'killpg'):
-                try:
-                    os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-                except Exception:
-                    pass
-            for child in p.children(recursive=True):
-                child.kill()
-            p.kill()
-        except Exception:
-            pass
+
+    pid = srv.get("pid")
     srv["status"] = "Stopped"
     srv["pid"] = None
+    srv["_restart_generation"] = int(srv.get("_restart_generation", 0)) + 1
+    srv.pop("start_time", None)
     save_db(db)
 
-def restart_server(folder):
+    if not pid:
+        return
+
+    try:
+        proc = psutil.Process(int(pid))
+        # Processes started by this host use start_new_session/setsid.
+        # Signal their process group so child workers are stopped as well.
+        if hasattr(os, "killpg"):
+            try:
+                pgid = os.getpgid(int(pid))
+                if pgid == int(pid):
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        proc.wait(timeout=4)
+                    except psutil.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)
+                    return
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+        # Safe fallback when process groups are unavailable.
+        try:
+            children = proc.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            children = []
+        for child in children:
+            try:
+                child.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=4)
+        except psutil.TimeoutExpired:
+            for child in children:
+                try:
+                    child.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            try:
+                proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, TypeError):
+        pass
+
+
+def restart_server(folder, expected_pid=None):
+    # Monitor-triggered restarts must not override an intentional user stop.
+    current = db["servers"].get(folder)
+    if not current:
+        return
+    if expected_pid is not None:
+        if current.get("status") != "Running" or current.get("pid") != expected_pid:
+            return
     stop_server_process(folder)
+    current = db["servers"].get(folder)
+    generation = current.get("_restart_generation") if current else None
     time.sleep(1.5)
-    start_server_process(folder)
+    current = db["servers"].get(folder)
+    if current and current.get("status") == "Stopped" and current.get("_restart_generation") == generation:
+        start_server_process(folder)
 
 # ============== مراقبة العمليات ==============
 def process_monitor():
@@ -318,9 +372,9 @@ def process_monitor():
                     try:
                         p = psutil.Process(srv["pid"])
                         if not p.is_running() or p.status() == psutil.STATUS_ZOMBIE:
-                            restart_server(folder)
+                            restart_server(folder, expected_pid=srv.get("pid"))
                     except psutil.NoSuchProcess:
-                        restart_server(folder)
+                        restart_server(folder, expected_pid=srv.get("pid"))
         except Exception:
             pass
         time.sleep(15)
@@ -514,6 +568,78 @@ def admin_users():
             "plan": udata.get("plan", "basic")
         })
     return jsonify({"success": True, "users": users_list})
+
+@app.route('/api/admin/accounts')
+def admin_accounts():
+    if not _check_admin_access():
+        return jsonify({"success": False}), 403
+    accounts = []
+    for email, user in db.get("users", {}).items():
+        safe = email.replace('@', '_at_').replace('.', '_dot_')
+        account_dir = os.path.realpath(os.path.join(USERS_DIR, safe))
+        root_dir = os.path.realpath(USERS_DIR)
+        if os.path.commonpath([root_dir, account_dir]) != root_dir:
+            continue
+        server_count = sum(1 for srv in db.get("servers", {}).values() if srv.get("owner") == email)
+        accounts.append({
+            "email": email,
+            "is_admin": bool(user.get("is_admin", False) or email == ADMIN_EMAIL),
+            "server_count": server_count,
+            "has_files": os.path.isdir(account_dir)
+        })
+    return jsonify({"success": True, "accounts": accounts})
+
+
+@app.route('/api/admin/account-download/<path:email>')
+def admin_download_account(email):
+    if not _check_admin_access():
+        return jsonify({"success": False, "message": "غير مصرح"}), 403
+    email = email.strip().lower()
+    if email not in db.get("users", {}):
+        return jsonify({"success": False, "message": "الحساب غير موجود"}), 404
+
+    safe = email.replace('@', '_at_').replace('.', '_dot_')
+    root_dir = os.path.realpath(USERS_DIR)
+    account_dir = os.path.realpath(os.path.join(USERS_DIR, safe))
+    if os.path.commonpath([root_dir, account_dir]) != root_dir:
+        return jsonify({"success": False, "message": "مسار غير صالح"}), 400
+
+    # Archive the complete account directory, including every server and nested file.
+    # The ZIP is created outside USERS_DIR to avoid including itself.
+    fd, archive_path = tempfile.mkstemp(prefix="account_export_", suffix=".zip")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            if os.path.isdir(account_dir):
+                for current, dirs, files in os.walk(account_dir, followlinks=False):
+                    dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(current, d))]
+                    for filename in files:
+                        full_path = os.path.join(current, filename)
+                        if os.path.islink(full_path) or not os.path.isfile(full_path):
+                            continue
+                        arcname = os.path.relpath(full_path, account_dir)
+                        archive.write(full_path, arcname)
+                    # Preserve empty folders as well.
+                    if not dirs and not files:
+                        arcname = os.path.relpath(current, account_dir).rstrip(os.sep) + "/"
+                        if arcname != "./":
+                            archive.writestr(arcname, "")
+        response = send_file(
+            archive_path,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"{safe}_backup.zip"
+        )
+        response.call_on_close(lambda: os.path.exists(archive_path) and os.remove(archive_path))
+        return response
+    except Exception:
+        try:
+            os.remove(archive_path)
+        except OSError:
+            pass
+        app.logger.exception("Account ZIP export failed")
+        return jsonify({"success": False, "message": "تعذر تجهيز النسخة المضغوطة"}), 500
+
 
 @app.route('/api/admin/create-user', methods=['POST'])
 def admin_create_user():
@@ -736,12 +862,14 @@ def server_action(folder, action):
         threading.Thread(target=restart_server, args=(folder,), daemon=True).start()
         return jsonify({"success": True, "message": "🔄 جاري إعادة التشغيل"})
     elif action == "delete":
+        server_path = srv.get("path", "")
         stop_server_process(folder)
-        if os.path.exists(srv["path"]):
-            shutil.rmtree(srv["path"], ignore_errors=True)
-        del db["servers"][folder]
+        # Remove the record before deleting files, preventing monitor restarts.
+        db["servers"].pop(folder, None)
         save_db(db)
-        return jsonify({"success": True, "message": "🗑 تم الحذف"})
+        if server_path and os.path.isdir(server_path):
+            shutil.rmtree(server_path, ignore_errors=True)
+        return jsonify({"success": True, "message": "🗑 تم حذف الخادم وملفاته نهائياً"})
     return jsonify({"success": False, "message": "إجراء غير معروف"})
 
 @app.route('/api/server/stats/<folder>')
@@ -1098,12 +1226,14 @@ def bot_server_action():
         threading.Thread(target=restart_server, args=(folder,), daemon=True).start()
         return jsonify({"success": True, "message": "🔄 جاري إعادة التشغيل"})
     elif action == "delete":
+        server_path = srv.get("path", "")
         stop_server_process(folder)
-        if os.path.exists(srv["path"]):
-            shutil.rmtree(srv["path"], ignore_errors=True)
-        del db["servers"][folder]
+        # Remove the record before deleting files, preventing monitor restarts.
+        db["servers"].pop(folder, None)
         save_db(db)
-        return jsonify({"success": True, "message": "🗑 تم الحذف"})
+        if server_path and os.path.isdir(server_path):
+            shutil.rmtree(server_path, ignore_errors=True)
+        return jsonify({"success": True, "message": "🗑 تم حذف الخادم وملفاته نهائياً"})
     return jsonify({"success": False, "message": "إجراء غير معروف"})
 
 @app.route('/api/bot/console', methods=['GET'])
